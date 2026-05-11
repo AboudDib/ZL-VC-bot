@@ -5,3 +5,4 @@ const activeChannels = new Map();
 const pendingCreation = new Map();
 
 module.exports = { activeChannels, pendingCreation };
+
