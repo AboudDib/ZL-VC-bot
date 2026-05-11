@@ -4,7 +4,7 @@ module.exports = {
 
   // The "Join to Create" trigger channel — you'll create this manually (step 3 in README)
   // After you create it, paste its ID here
-  JOIN_TO_CREATE_CHANNEL_ID: '1502853179539329065',
+  JOIN_TO_CREATE_CHANNEL_ID: 'PASTE_YOUR_TRIGGER_CHANNEL_ID_HERE',
 
   // Language options shown to user before VC is created
   LANGUAGES: [
