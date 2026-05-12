@@ -12,10 +12,10 @@ const { activeChannels, pendingCreation } = require('./store');
 
 // Tracks userId -> timestamp of last VC creation trigger (30s user cooldown)
 const creationCooldown = new Map();
-const COOLDOWN_MS = 10_000;
+const COOLDOWN_MS = 30_000;
 
-// Tracks userId -> whether createTempChannel is currently locked for them (10s function lock)
-const functionLock = new Map();
+// Synchronous lock — set before any await so duplicate events in same tick are blocked
+const functionLock = new Set();
 
 async function handleVoiceStateUpdate(client, oldState, newState) {
   const member = newState.member || oldState.member;
@@ -31,7 +31,18 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
       return;
     }
 
+    // Check function lock synchronously before doing anything async
+    if (functionLock.has(member.id)) {
+      console.log(`🔒 Function locked for ${member.user.tag}, ignoring trigger`);
+      return;
+    }
+
+    // Set BOTH locks synchronously right here — before any await
+    functionLock.add(member.id);
     creationCooldown.set(member.id, now);
+
+    // Clear them after their respective durations
+    setTimeout(() => functionLock.delete(member.id), 10_000);
     setTimeout(() => creationCooldown.delete(member.id), COOLDOWN_MS);
 
     await createTempChannel(client, member, newState.guild);
@@ -53,14 +64,6 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
 }
 
 async function createTempChannel(client, member, guild) {
-  // ── Function-level 10s lock — no matter what calls this, it can only run once per user per 10s
-  if (functionLock.get(member.id)) {
-    console.log(`🔒 Function locked for ${member.user.tag}, skipping`);
-    return;
-  }
-  functionLock.set(member.id, true);
-  setTimeout(() => functionLock.delete(member.id), 10_000);
-
   try {
     const channel = await guild.channels.create({
       name: `🌐 ${member.displayName}'s VC`,
@@ -140,6 +143,7 @@ async function createTempChannel(client, member, guild) {
 
   } catch (err) {
     console.error('Failed to create temp VC:', err);
+    functionLock.delete(member.id);
     for (const [id, data] of activeChannels) {
       if (data.ownerId === member.id && data.language === null) {
         activeChannels.delete(id);
