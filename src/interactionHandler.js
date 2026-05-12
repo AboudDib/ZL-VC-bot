@@ -13,6 +13,7 @@ const { LANGUAGES } = require('./config');
 const EPH = { flags: MessageFlags.Ephemeral };
 
 async function handleInteraction(client, interaction) {
+  console.log(`[activeChannels] keys: [${[...activeChannels.keys()].join(', ')}]`);
   try {
 
     // ── Language Select (posted in VC text chat) ────────────────────────────
@@ -74,10 +75,13 @@ async function handleInteraction(client, interaction) {
       }
 
       const guild = client.guilds.cache.get(data.guildId);
-      const guildChannel = guild?.channels.cache.get(channelId);  // fetched by ID, name doesn't matter
+      const guildChannel = await guild?.channels.fetch(channelId).catch((err) => {
+        if (err.code === 10003) activeChannels.delete(channelId);
+        return null;
+      });
 
       if (!guildChannel) {
-        return interaction.reply({ content: '❌ Channel not found.', ...EPH });
+        return interaction.reply({ content: '❌ Channel no longer exists.', ...EPH });
       }
 
       if (action === 'lock') {
@@ -178,7 +182,14 @@ async function handleInteraction(client, interaction) {
       }
 
       const guild = client.guilds.cache.get(data.guildId);
-      const guildChannel = guild?.channels.cache.get(channelId);  // ID lookup, always works post-rename
+      // fetch() hits Discord directly — avoids stale cache returning a deleted channel
+      const guildChannel = await guild?.channels.fetch(channelId).catch((err) => {
+        if (err.code === 10003) {
+          // Channel is gone on Discord's end — clean up the stale map entry
+          activeChannels.delete(channelId);
+        }
+        return null;
+      });
       if (!guildChannel) return interaction.reply({ content: '❌ Channel no longer exists.', ...EPH });
 
       if (type === 'rename') {
