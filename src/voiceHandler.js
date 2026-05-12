@@ -31,17 +31,14 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
       return;
     }
 
-    // Check function lock synchronously before doing anything async
     if (functionLock.has(member.id)) {
       console.log(`🔒 Function locked for ${member.user.tag}, ignoring trigger`);
       return;
     }
 
-    // Set BOTH locks synchronously right here — before any await
     functionLock.add(member.id);
     creationCooldown.set(member.id, now);
 
-    // Clear them after their respective durations
     setTimeout(() => functionLock.delete(member.id), 5_000);
     setTimeout(() => creationCooldown.delete(member.id), COOLDOWN_MS);
 
@@ -157,14 +154,26 @@ async function finalizeChannel(client, member, guild, channel, languageCode, pro
   const lang = LANGUAGES.find((l) => l.code === languageCode);
   const newName = `${lang.prefix} ${member.displayName}'s VC`;
 
-  await channel.setName(newName).catch(() => {});
+  // Fetch fresh channel before rename to avoid stale cache
+  const freshChannel = await guild.channels.fetch(channel.id).catch(() => null);
+  if (freshChannel) {
+    await freshChannel.setName(newName).catch(() => {});
+  } else {
+    await channel.setName(newName).catch(() => {});
+  }
 
-  const channelData = activeChannels.get(channel.id);
-  if (channelData) channelData.language = languageCode;
+  // Always do a full set — never mutate in place — so interactionHandler always
+  // reads a complete, up-to-date record with language populated
+  activeChannels.set(channel.id, {
+    ownerId: member.id,
+    language: languageCode,
+    guildId: guild.id,
+    lastName: newName,
+    updatedAt: Date.now(),
+  });
 
   await promptMsg.delete().catch(() => {});
-  await sendControlPanel(member, channel);
-
+  await sendControlPanel(member, freshChannel || channel);
 }
 
 async function sendControlPanel(member, channel) {
