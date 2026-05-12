@@ -37,13 +37,5 @@ server.listen(3000, () => {
   console.log('🌐 Keep-alive server running on port 3000');
 });
 
-// Ping itself every 5 minutes
-setInterval(() => {
-  http.get('http://localhost:3000', (res) => {
-    console.log(`♻️  Keep-alive ping: ${res.statusCode}`);
-  }).on('error', (err) => {
-    console.error('Keep-alive ping failed:', err.message);
-  });
-}, 30 * 1000);
 
 client.login(process.env.BOT_TOKEN);
