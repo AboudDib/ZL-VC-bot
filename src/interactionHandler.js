@@ -23,7 +23,6 @@ function lock(channelId, action, timeoutMs = 30_000) {
   const key = `${channelId}_${action}`;
   const existing = actionLocks.get(key);
   if (existing?.timeout) clearTimeout(existing.timeout);
-
   const timeout = setTimeout(() => actionLocks.delete(key), timeoutMs);
   actionLocks.set(key, { locked: true, timeout });
 }
@@ -39,18 +38,16 @@ function unlock(channelId, action) {
 async function handleInteraction(client, interaction) {
   try {
 
-    // ── Language Select (posted in VC text chat) ────────────────────────────
+    // ── Language Select (posted in VC text chat) ──────────────────────────
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('select_language_')) {
       const channelId = interaction.customId.replace('select_language_', '');
       const languageCode = interaction.values[0];
       const userId = interaction.user.id;
 
       const pending = pendingCreation.get(channelId);
-
       if (!pending) {
         return interaction.reply({ content: '❌ This selection already expired.', ...EPH });
       }
-
       if (pending.ownerId !== userId) {
         return interaction.reply({ content: '❌ Only the VC owner can pick the language.', ...EPH });
       }
@@ -68,25 +65,22 @@ async function handleInteraction(client, interaction) {
       return;
     }
 
-    // ── Buttons (in VC text chat) ───────────────────────────────────────────
+    // ── Buttons (in VC text chat) ─────────────────────────────────────────
     if (interaction.isButton()) {
       const parts = interaction.customId.split('_');
       const action = parts[1];
       const channelId = parts[2];
 
       const channelData = activeChannels.get(channelId);
-
       if (!channelData) {
         return interaction.reply({ content: '❌ This VC no longer exists.', ...EPH });
       }
-
       if (channelData.ownerId !== interaction.user.id) {
         return interaction.reply({ content: '❌ Only the VC owner can use these buttons.', ...EPH });
       }
 
       const guild = client.guilds.cache.get(channelData.guildId);
       const guildChannel = await guild?.channels.fetch(channelId).catch(() => null);
-
       if (!guildChannel) {
         return interaction.reply({ content: '❌ Channel not found.', ...EPH });
       }
@@ -96,7 +90,6 @@ async function handleInteraction(client, interaction) {
           return interaction.reply({ content: '⏳ Please wait before renaming again.', ...EPH });
         }
 
-        // Lock for 30s — auto-unlocks if modal is dismissed without submitting
         lock(channelId, 'rename', 30_000);
 
         const modal = new ModalBuilder()
@@ -142,7 +135,7 @@ async function handleInteraction(client, interaction) {
       }
     }
 
-    // ── User Select (kick) ──────────────────────────────────────────────────
+    // ── User Select (kick) ────────────────────────────────────────────────
     if (interaction.isUserSelectMenu() && interaction.customId.startsWith('userselect_kick_')) {
       const channelId = interaction.customId.replace('userselect_kick_', '');
       const channelData = activeChannels.get(channelId);
@@ -175,12 +168,13 @@ async function handleInteraction(client, interaction) {
       });
     }
 
-    // ── Modals ──────────────────────────────────────────────────────────────
+    // ── Modals ────────────────────────────────────────────────────────────
     if (interaction.isModalSubmit()) {
       const parts = interaction.customId.split('_');
       const type = parts[1];
       const channelId = parts[2];
 
+      // Always re-read from store at submit time — not a stale snapshot from button click
       const channelData = activeChannels.get(channelId);
       if (!channelData || channelData.ownerId !== interaction.user.id) {
         return interaction.reply({ content: '❌ Not authorized.', ...EPH });
@@ -192,18 +186,22 @@ async function handleInteraction(client, interaction) {
         try {
           const rawName = interaction.fields.getTextInputValue('new_name').trim();
 
+          // Guard: language must be set (finalize should have written it)
           const lang = LANGUAGES.find((l) => l.code === channelData.language);
+          if (!lang) {
+            return interaction.reply({ content: '❌ Could not determine VC language. Please re-create your VC.', ...EPH });
+          }
+
           const newName = `${lang.prefix} ${rawName}`;
 
-          // Always fetch fresh — avoids stale cache after previous renames
           const freshChannel = await guild.channels.fetch(channelId).catch(() => null);
-
           if (!freshChannel) {
             return interaction.reply({ content: '❌ Channel no longer exists.', ...EPH });
           }
 
           await freshChannel.setName(newName);
 
+          // Spread the current store record (re-read above), not a stale button-time snapshot
           activeChannels.set(channelId, {
             ...channelData,
             lastName: newName,
@@ -213,7 +211,6 @@ async function handleInteraction(client, interaction) {
           return interaction.reply({ content: `✅ Renamed to **${newName}**`, ...EPH });
 
         } finally {
-          // Unlock immediately on submit (success or error), clearing the auto-timeout too
           unlock(channelId, 'rename');
         }
       }
@@ -224,7 +221,6 @@ async function handleInteraction(client, interaction) {
           return interaction.reply({ content: '❌ Invalid number. Enter 0–99.', ...EPH });
         }
 
-        // Fetch fresh channel to avoid stale reference
         const freshChannel = await guild.channels.fetch(channelId).catch(() => null);
         if (!freshChannel) return interaction.reply({ content: '❌ Channel no longer exists.', ...EPH });
 
