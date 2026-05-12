@@ -20,25 +20,42 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
     return;
   }
 
+  // ── User joins a managed VC — cancel any pending delete ──────────────────
+  if (newState.channelId && activeChannels.has(newState.channelId)) {
+    const data = activeChannels.get(newState.channelId);
+    if (data?.deleteTimer) {
+      clearTimeout(data.deleteTimer);
+      data.deleteTimer = null;
+      console.log(`↩️  Delete cancelled — user rejoined: ${newState.channel?.name}`);
+    }
+  }
+
   // ── User leaves a managed VC ─────────────────────────────────────────────
   if (oldState.channelId && activeChannels.has(oldState.channelId)) {
     const ch = oldState.guild.channels.cache.get(oldState.channelId);
-    if (ch && ch.members.size === 0) {
-      const data = activeChannels.get(oldState.channelId);
+    const data = activeChannels.get(oldState.channelId);
 
-      // Clear the 60s timeout if it's still running (finalized or not)
-      if (data?.timeoutRef) clearTimeout(data.timeoutRef);
+    if (ch && ch.members.size === 0 && data) {
+      // 5s grace period — cancels if someone rejoins before it fires
+      const deleteTimer = setTimeout(async () => {
+        const freshCh = oldState.guild.channels.cache.get(oldState.channelId);
+        if (!freshCh || freshCh.members.size > 0) {
+          console.log(`↩️  Reprieve — someone rejoined: ${ch.name}`);
+          return;
+        }
+        if (data.timeoutRef) clearTimeout(data.timeoutRef);
+        activeChannels.delete(oldState.channelId);
+        await freshCh.delete().catch(() => {});
+        console.log(`🗑️  Deleted empty VC: ${freshCh.name}`);
+      }, 5_000);
 
-      activeChannels.delete(oldState.channelId);
-      await ch.delete().catch(() => {});
-      console.log(`🗑️  Deleted empty VC: ${ch.name}`);
+      data.deleteTimer = deleteTimer;
     }
   }
 }
 
 async function createTempChannel(client, member, guild) {
   try {
-    // Step 1: Create the VC immediately with a temp name
     const channel = await guild.channels.create({
       name: `🌐 ${member.displayName}'s VC`,
       type: ChannelType.GuildVoice,
@@ -63,11 +80,9 @@ async function createTempChannel(client, member, guild) {
       ],
     });
 
-    // Step 2: Move member into it
     await member.voice.setChannel(channel);
     console.log(`✅ Temp VC created: ${channel.name} for ${member.user.tag}`);
 
-    // Step 3: Post language picker in the VC text chat
     const row = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`select_language_${channel.id}`)
@@ -95,7 +110,6 @@ async function createTempChannel(client, member, guild) {
       components: [row],
     });
 
-    // Step 4: 60s timeout — delete if still not finalized
     const timeoutRef = setTimeout(async () => {
       const data = activeChannels.get(channel.id);
       if (data && !data.finalized) {
@@ -105,7 +119,6 @@ async function createTempChannel(client, member, guild) {
       }
     }, 60_000);
 
-    // Step 5: Register in activeChannels — single source of truth
     activeChannels.set(channel.id, {
       ownerId: member.id,
       guildId: guild.id,
@@ -113,6 +126,7 @@ async function createTempChannel(client, member, guild) {
       locked: false,
       finalized: false,
       timeoutRef,
+      deleteTimer: null,
       promptMsgId: promptMsg.id,
     });
 
@@ -123,18 +137,15 @@ async function createTempChannel(client, member, guild) {
 
 async function finalizeChannel(client, member, guild, channel, languageCode) {
   const data = activeChannels.get(channel.id);
-  if (!data) return; // already cleaned up
+  if (!data) return;
 
-  // Cancel the 60s timeout
   clearTimeout(data.timeoutRef);
 
   const lang = LANGUAGES.find((l) => l.code === languageCode);
   const newName = `${lang.prefix} ${member.displayName}'s VC`;
 
-  // Rename the channel
   await channel.setName(newName).catch(() => {});
 
-  // Delete the language prompt message
   try {
     const promptMsg = await channel.messages.fetch(data.promptMsgId);
     await promptMsg.delete().catch(() => {});
@@ -142,15 +153,12 @@ async function finalizeChannel(client, member, guild, channel, languageCode) {
     // message already gone, fine
   }
 
-  // Update the store entry in-place — channel.id never changes
   data.language = languageCode;
   data.finalized = true;
   data.timeoutRef = null;
   data.promptMsgId = null;
 
-  // Send control panel
   await sendControlPanel(member, channel);
-
   console.log(`✅ Finalized VC: ${newName}`);
 }
 
