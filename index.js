@@ -16,7 +16,7 @@ const client = new Client({
 client.once('ready', () => {
   console.log(`✅ Bot online as ${client.user.tag}`);
   console.log(`📡 Serving ${client.guilds.cache.size} server(s)`);
-  startCleanupLoop(client); // start checking for empty VCs every 30s
+  startCleanupLoop(client);
 });
 
 client.on('voiceStateUpdate', (oldState, newState) => {
