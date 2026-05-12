@@ -193,7 +193,15 @@ async function handleInteraction(client, interaction) {
 
           if (!freshChannel) return interaction.reply({ content: '❌ Channel no longer exists.', ...EPH });
 
-          await freshChannel.setName(newName);
+          try {
+            await freshChannel.setName(newName);
+          } catch (rateErr) {
+            console.error('[RENAME] setName failed:', rateErr);
+            return interaction.reply({
+              content: '⏳ Discord is rate limiting renames (max 2 per 10 min). Please wait and try again.',
+              ...EPH,
+            });
+          }
 
           activeChannels.set(channelId, {
             ...channelData,
