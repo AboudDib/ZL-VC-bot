@@ -10,9 +10,12 @@ const {
 const { JOIN_TO_CREATE_CHANNEL_ID, CATEGORY_ID, LANGUAGES, DEFAULT_USER_LIMIT } = require('./config');
 const { activeChannels, pendingCreation } = require('./store');
 
-// Tracks userId -> timestamp of last VC creation trigger
+// Tracks userId -> timestamp of last VC creation trigger (30s user cooldown)
 const creationCooldown = new Map();
-const COOLDOWN_MS = 30_000;
+const COOLDOWN_MS = 10_000;
+
+// Tracks userId -> whether createTempChannel is currently locked for them (10s function lock)
+const functionLock = new Map();
 
 async function handleVoiceStateUpdate(client, oldState, newState) {
   const member = newState.member || oldState.member;
@@ -50,6 +53,14 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
 }
 
 async function createTempChannel(client, member, guild) {
+  // ── Function-level 10s lock — no matter what calls this, it can only run once per user per 10s
+  if (functionLock.get(member.id)) {
+    console.log(`🔒 Function locked for ${member.user.tag}, skipping`);
+    return;
+  }
+  functionLock.set(member.id, true);
+  setTimeout(() => functionLock.delete(member.id), 10_000);
+
   try {
     const channel = await guild.channels.create({
       name: `🌐 ${member.displayName}'s VC`,
