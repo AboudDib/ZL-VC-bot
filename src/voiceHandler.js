@@ -10,35 +10,9 @@ const {
 const { JOIN_TO_CREATE_CHANNEL_ID, CATEGORY_ID, LANGUAGES, DEFAULT_USER_LIMIT } = require('./config');
 const { activeChannels, pendingCreation } = require('./store');
 
-// ── Periodic cleanup loop ────────────────────────────────────────────────────
-function startCleanupLoop(client) {
-  setInterval(async () => {
-    for (const [channelId] of activeChannels) {
-      try {
-        const channelData = activeChannels.get(channelId);
-        const guild = client.guilds.cache.get(channelData.guildId);
-        if (!guild) continue;
-
-        // Check how many members are actually in this channel via voice states
-        const membersInChannel = guild.voiceStates.cache.filter(
-          (vs) => vs.channelId === channelId
-        ).size;
-
-        if (membersInChannel === 0) {
-          const ch = await guild.channels.fetch(channelId).catch(() => null);
-          activeChannels.delete(channelId);
-          pendingCreation.delete(channelId);
-          if (ch) {
-            await ch.delete().catch(() => {});
-            console.log(`🧹 Cleanup loop deleted empty VC: ${ch.name}`);
-          }
-        }
-      } catch (err) {
-        console.error(`Cleanup loop error for channel ${channelId}:`, err);
-      }
-    }
-  }, 30_000);
-}
+// Tracks userId -> timestamp of last VC creation trigger
+const creationCooldown = new Map();
+const COOLDOWN_MS = 30_000;
 
 async function handleVoiceStateUpdate(client, oldState, newState) {
   const member = newState.member || oldState.member;
@@ -46,11 +20,16 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
 
   // ── User joins trigger channel ───────────────────────────────────────────
   if (newState.channelId === JOIN_TO_CREATE_CHANNEL_ID) {
-    const alreadyOwns = [...activeChannels.values()].some(d => d.ownerId === member.id);
-    if (alreadyOwns) {
-      console.log(`⚠️  Duplicate trigger ignored for ${member.user.tag}`);
+    const now = Date.now();
+    const lastTrigger = creationCooldown.get(member.id);
+
+    if (lastTrigger && now - lastTrigger < COOLDOWN_MS) {
+      console.log(`🚫 Cooldown active for ${member.user.tag}, ignoring trigger`);
       return;
     }
+
+    creationCooldown.set(member.id, now);
+    setTimeout(() => creationCooldown.delete(member.id), COOLDOWN_MS);
 
     await createTempChannel(client, member, newState.guild);
     return;
@@ -58,7 +37,6 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
 
   // ── User leaves a managed VC ─────────────────────────────────────────────
   if (oldState.channelId && activeChannels.has(oldState.channelId)) {
-    // If they just moved to another channel (not disconnected), skip
     if (newState.channelId) return;
 
     const ch = oldState.guild.channels.cache.get(oldState.channelId);
@@ -97,7 +75,6 @@ async function createTempChannel(client, member, guild) {
       ],
     });
 
-    // Register BEFORE moving so duplicate guard works
     activeChannels.set(channel.id, {
       ownerId: member.id,
       language: null,
@@ -199,4 +176,4 @@ async function sendControlPanel(member, channel) {
   await channel.send({ content: `<@${member.id}>`, embeds: [embed], components: [row] }).catch(() => {});
 }
 
-module.exports = { handleVoiceStateUpdate, finalizeChannel, startCleanupLoop };
+module.exports = { handleVoiceStateUpdate, finalizeChannel };
