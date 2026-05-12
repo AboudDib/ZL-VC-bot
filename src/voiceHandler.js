@@ -10,13 +10,26 @@ const {
 const { JOIN_TO_CREATE_CHANNEL_ID, CATEGORY_ID, LANGUAGES, DEFAULT_USER_LIMIT } = require('./config');
 const { activeChannels, pendingCreation } = require('./store');
 
+// Track users currently being processed to prevent double triggers
+const processing = new Set();
+
 async function handleVoiceStateUpdate(client, oldState, newState) {
   const member = newState.member || oldState.member;
   if (!member || member.user.bot) return;
 
+  const userId = member.id;
+
   // ── User joins trigger channel ───────────────────────────────────────────
   if (newState.channelId === JOIN_TO_CREATE_CHANNEL_ID) {
-    await createTempChannel(client, member, newState.guild);
+    // Ignore if we're already creating a VC for this user
+    if (processing.has(userId)) return;
+    processing.add(userId);
+
+    try {
+      await createTempChannel(client, member, newState.guild);
+    } finally {
+      processing.delete(userId);
+    }
     return;
   }
 
@@ -25,7 +38,7 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
     const ch = oldState.guild.channels.cache.get(oldState.channelId);
     if (ch && ch.members.size === 0) {
       activeChannels.delete(oldState.channelId);
-      pendingCreation.delete(oldState.channelId); // clean up if still pending
+      pendingCreation.delete(oldState.channelId);
       await ch.delete().catch(() => {});
       console.log(`🗑️  Deleted empty VC: ${ch.name}`);
     }
@@ -34,7 +47,6 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
 
 async function createTempChannel(client, member, guild) {
   try {
-    // Step 1: Create the VC immediately with a temp name
     const channel = await guild.channels.create({
       name: `🌐 ${member.displayName}'s VC`,
       type: ChannelType.GuildVoice,
@@ -59,11 +71,9 @@ async function createTempChannel(client, member, guild) {
       ],
     });
 
-    // Step 2: Move member into it
     await member.voice.setChannel(channel);
     console.log(`✅ Temp VC created: ${channel.name} for ${member.user.tag}`);
 
-    // Step 3: Post language picker in the VC text chat
     const row = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`select_language_${channel.id}`)
@@ -81,7 +91,7 @@ async function createTempChannel(client, member, guild) {
       .setColor(0x5865f2)
       .setTitle('🎙️ Pick Your VC Language')
       .setDescription(
-        `Hey ${member}, pick a **language** for your VC!\nIt will be added as a prefix to the channel name.\n\n⏰ **You have 60 seconds** or the channel will close.`
+        `Hey <@${member.id}>, pick a **language** for your VC!\nIt will be added as a prefix to the channel name.\n\n⏰ **You have 60 seconds** or the channel will close.`
       )
       .setFooter({ text: 'Only the owner can pick' });
 
@@ -91,7 +101,6 @@ async function createTempChannel(client, member, guild) {
       components: [row],
     });
 
-    // Step 4: Store as pending — no language yet
     const timeout = setTimeout(async () => {
       if (pendingCreation.has(channel.id)) {
         pendingCreation.delete(channel.id);
@@ -108,7 +117,6 @@ async function createTempChannel(client, member, guild) {
       timeout,
     });
 
-    // Mark as active but language not set yet
     activeChannels.set(channel.id, {
       ownerId: member.id,
       language: null,
@@ -122,24 +130,18 @@ async function createTempChannel(client, member, guild) {
 }
 
 async function finalizeChannel(client, member, guild, channel, languageCode, promptMsg, timeout) {
-  // Cancel the 60s timeout
   clearTimeout(timeout);
   pendingCreation.delete(channel.id);
 
   const lang = LANGUAGES.find((l) => l.code === languageCode);
   const newName = `${lang.prefix} ${member.displayName}'s VC`;
 
-  // Rename the channel
   await channel.setName(newName).catch(() => {});
 
-  // Update language in store
   const channelData = activeChannels.get(channel.id);
   if (channelData) channelData.language = languageCode;
 
-  // Delete the language prompt message
   await promptMsg.delete().catch(() => {});
-
-  // Send control panel in VC text chat
   await sendControlPanel(member, channel);
 
   console.log(`✅ Finalized VC: ${newName}`);
@@ -171,4 +173,3 @@ async function sendControlPanel(member, channel) {
 }
 
 module.exports = { handleVoiceStateUpdate, finalizeChannel };
-
