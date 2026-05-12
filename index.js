@@ -4,10 +4,9 @@ const { handleVoiceStateUpdate } = require('./src/voiceHandler');
 const { handleInteraction } = require('./src/interactionHandler');
 const http = require('http');
 
-process.on("unhandledRejection", console.error);
-process.on("uncaughtException", console.error);
+// Keep Render Web Service alive by binding to a port
+http.createServer((req, res) => res.end('Bot is alive!')).listen(process.env.PORT || 3000);
 
-// ── Discord Client ───────────────────────────────
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -18,9 +17,30 @@ const client = new Client({
   ],
 });
 
-// ── Events ───────────────────────────────
+// ── REST request/response logger ─────────────────────────────────────────────
+client.rest.on('request', (req) => {
+  if (req.method === 'POST' || req.method === 'PATCH' || req.method === 'PUT') {
+    console.log(`[REST ▶] ${req.method} ${req.path}`);
+    if (req.data?.body) {
+      try {
+        console.log(`[REST ▶] body:`, JSON.stringify(JSON.parse(req.data.body), null, 2));
+      } catch {
+        console.log(`[REST ▶] body:`, req.data.body);
+      }
+    }
+  }
+});
+
+client.rest.on('response', (req, res) => {
+  if (req.method === 'POST' || req.method === 'PATCH' || req.method === 'PUT') {
+    console.log(`[REST ◀] ${req.method} ${req.path} → ${res.status}`);
+  }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 client.once('ready', () => {
   console.log(`✅ Bot online as ${client.user.tag}`);
+  console.log(`📡 Serving ${client.guilds.cache.size} server(s)`);
 });
 
 client.on('voiceStateUpdate', (oldState, newState) => {
@@ -31,15 +51,4 @@ client.on('interactionCreate', (interaction) => {
   handleInteraction(client, interaction);
 });
 
-// ── Keep-alive server ───────────────────────────────
-const server = http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end('OK');
-});
-
-server.listen(process.env.PORT || 3000, () => {
-  console.log(`🌐 Keep-alive server running on port ${process.env.PORT || 3000}`);
-});
-
-// ── Login bot (ONLY ONCE) ───────────────────────────
 client.login(process.env.BOT_TOKEN);
