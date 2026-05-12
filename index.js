@@ -44,6 +44,6 @@ setInterval(() => {
   }).on('error', (err) => {
     console.error('Keep-alive ping failed:', err.message);
   });
-}, 5 * 60 * 1000);
+}, 30 * 1000);
 
 client.login(process.env.BOT_TOKEN);
