@@ -12,7 +12,6 @@ const { LANGUAGES } = require('./config');
 
 const EPH = { flags: MessageFlags.Ephemeral };
 
-// ── Action Locks (timeout-based so dismissed modals don't lock forever) ──────
 const actionLocks = new Map();
 
 function isLocked(channelId, action) {
@@ -38,57 +37,49 @@ function unlock(channelId, action) {
 async function handleInteraction(client, interaction) {
   try {
 
-    // ── Language Select (posted in VC text chat) ──────────────────────────
+    // ── Language Select ───────────────────────────────────────────────────
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('select_language_')) {
       const channelId = interaction.customId.replace('select_language_', '');
       const languageCode = interaction.values[0];
       const userId = interaction.user.id;
 
       const pending = pendingCreation.get(channelId);
-      if (!pending) {
-        return interaction.reply({ content: '❌ This selection already expired.', ...EPH });
-      }
-      if (pending.ownerId !== userId) {
-        return interaction.reply({ content: '❌ Only the VC owner can pick the language.', ...EPH });
-      }
+      if (!pending) return interaction.reply({ content: '❌ This selection already expired.', ...EPH });
+      if (pending.ownerId !== userId) return interaction.reply({ content: '❌ Only the VC owner can pick the language.', ...EPH });
 
       const guild = client.guilds.cache.get(pending.guildId);
       const channel = await guild?.channels.fetch(channelId).catch(() => null);
       const member = guild?.members.cache.get(userId) || await guild?.members.fetch(userId).catch(() => null);
 
-      if (!channel || !member) {
-        return interaction.reply({ content: '❌ Channel or member not found.', ...EPH });
-      }
+      if (!channel || !member) return interaction.reply({ content: '❌ Channel or member not found.', ...EPH });
 
       await interaction.reply({ content: '✅ Setting up your VC...', ...EPH });
       await finalizeChannel(client, member, guild, channel, languageCode, pending.promptMsg, pending.timeout);
       return;
     }
 
-    // ── Buttons (in VC text chat) ─────────────────────────────────────────
+    // ── Buttons ───────────────────────────────────────────────────────────
     if (interaction.isButton()) {
       const parts = interaction.customId.split('_');
       const action = parts[1];
       const channelId = parts[2];
 
+      console.log(`[BTN] action=${action} channelId=${channelId}`);
+      console.log(`[BTN] activeChannels has channelId: ${activeChannels.has(channelId)}`);
+      console.log(`[BTN] activeChannels contents:`, [...activeChannels.entries()]);
+
       const channelData = activeChannels.get(channelId);
-      if (!channelData) {
-        return interaction.reply({ content: '❌ This VC no longer exists.', ...EPH });
-      }
-      if (channelData.ownerId !== interaction.user.id) {
-        return interaction.reply({ content: '❌ Only the VC owner can use these buttons.', ...EPH });
-      }
+      if (!channelData) return interaction.reply({ content: '❌ This VC no longer exists.', ...EPH });
+      if (channelData.ownerId !== interaction.user.id) return interaction.reply({ content: '❌ Only the VC owner can use these buttons.', ...EPH });
+
+      console.log(`[BTN] channelData:`, channelData);
 
       const guild = client.guilds.cache.get(channelData.guildId);
       const guildChannel = await guild?.channels.fetch(channelId).catch(() => null);
-      if (!guildChannel) {
-        return interaction.reply({ content: '❌ Channel not found.', ...EPH });
-      }
+      if (!guildChannel) return interaction.reply({ content: '❌ Channel not found.', ...EPH });
 
       if (action === 'rename') {
-        if (isLocked(channelId, 'rename')) {
-          return interaction.reply({ content: '⏳ Please wait before renaming again.', ...EPH });
-        }
+        if (isLocked(channelId, 'rename')) return interaction.reply({ content: '⏳ Please wait before renaming again.', ...EPH });
 
         lock(channelId, 'rename', 30_000);
 
@@ -140,9 +131,7 @@ async function handleInteraction(client, interaction) {
       const channelId = interaction.customId.replace('userselect_kick_', '');
       const channelData = activeChannels.get(channelId);
 
-      if (!channelData || channelData.ownerId !== interaction.user.id) {
-        return interaction.reply({ content: '❌ Not authorized.', ...EPH });
-      }
+      if (!channelData || channelData.ownerId !== interaction.user.id) return interaction.reply({ content: '❌ Not authorized.', ...EPH });
 
       const guild = client.guilds.cache.get(channelData.guildId);
       const targetId = interaction.values[0];
@@ -152,9 +141,7 @@ async function handleInteraction(client, interaction) {
       if (targetId === interaction.user.id) return interaction.reply({ content: "❌ You can't kick yourself.", ...EPH });
 
       const voiceState = guild.voiceStates.cache.get(targetId);
-      if (voiceState?.channelId !== channelId) {
-        return interaction.reply({ content: '❌ That user is not in your VC.', ...EPH });
-      }
+      if (voiceState?.channelId !== channelId) return interaction.reply({ content: '❌ That user is not in your VC.', ...EPH });
 
       await targetMember.voice.disconnect();
       const guildChannel = await guild.channels.fetch(channelId).catch(() => null);
@@ -174,8 +161,15 @@ async function handleInteraction(client, interaction) {
       const type = parts[1];
       const channelId = parts[2];
 
-      // Always re-read from store at submit time — not a stale snapshot from button click
+      console.log(`[MODAL] type=${type} channelId=${channelId}`);
+      console.log(`[MODAL] activeChannels has channelId: ${activeChannels.has(channelId)}`);
+      console.log(`[MODAL] activeChannels contents:`, [...activeChannels.entries()]);
+
       const channelData = activeChannels.get(channelId);
+
+      console.log(`[MODAL] channelData:`, channelData);
+      console.log(`[MODAL] interaction.user.id:`, interaction.user.id);
+
       if (!channelData || channelData.ownerId !== interaction.user.id) {
         return interaction.reply({ content: '❌ Not authorized.', ...EPH });
       }
@@ -186,27 +180,28 @@ async function handleInteraction(client, interaction) {
         try {
           const rawName = interaction.fields.getTextInputValue('new_name').trim();
 
-          // Guard: language must be set (finalize should have written it)
+          console.log(`[RENAME] language in store: ${channelData.language}`);
           const lang = LANGUAGES.find((l) => l.code === channelData.language);
+          console.log(`[RENAME] lang found:`, lang);
+
           if (!lang) {
-            return interaction.reply({ content: '❌ Could not determine VC language. Please re-create your VC.', ...EPH });
+            return interaction.reply({ content: '❌ Could not determine VC language.', ...EPH });
           }
 
           const newName = `${lang.prefix} ${rawName}`;
-
           const freshChannel = await guild.channels.fetch(channelId).catch(() => null);
-          if (!freshChannel) {
-            return interaction.reply({ content: '❌ Channel no longer exists.', ...EPH });
-          }
+
+          if (!freshChannel) return interaction.reply({ content: '❌ Channel no longer exists.', ...EPH });
 
           await freshChannel.setName(newName);
 
-          // Spread the current store record (re-read above), not a stale button-time snapshot
           activeChannels.set(channelId, {
             ...channelData,
             lastName: newName,
             updatedAt: Date.now(),
           });
+
+          console.log(`[RENAME] success, updated store:`, activeChannels.get(channelId));
 
           return interaction.reply({ content: `✅ Renamed to **${newName}**`, ...EPH });
 
@@ -217,9 +212,7 @@ async function handleInteraction(client, interaction) {
 
       if (type === 'limit') {
         const limit = parseInt(interaction.fields.getTextInputValue('user_limit').trim());
-        if (isNaN(limit) || limit < 0 || limit > 99) {
-          return interaction.reply({ content: '❌ Invalid number. Enter 0–99.', ...EPH });
-        }
+        if (isNaN(limit) || limit < 0 || limit > 99) return interaction.reply({ content: '❌ Invalid number. Enter 0–99.', ...EPH });
 
         const freshChannel = await guild.channels.fetch(channelId).catch(() => null);
         if (!freshChannel) return interaction.reply({ content: '❌ Channel no longer exists.', ...EPH });
