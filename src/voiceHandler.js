@@ -12,7 +12,7 @@ const { activeChannels, pendingCreation } = require('./store');
 
 // Tracks userId -> timestamp of last VC creation trigger (30s user cooldown)
 const creationCooldown = new Map();
-const COOLDOWN_MS = 30_000;
+const COOLDOWN_MS = 5_000;
 
 // Synchronous lock — set before any await so duplicate events in same tick are blocked
 const functionLock = new Set();
@@ -42,7 +42,7 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
     creationCooldown.set(member.id, now);
 
     // Clear them after their respective durations
-    setTimeout(() => functionLock.delete(member.id), 10_000);
+    setTimeout(() => functionLock.delete(member.id), 5_000);
     setTimeout(() => creationCooldown.delete(member.id), COOLDOWN_MS);
 
     await createTempChannel(client, member, newState.guild);
