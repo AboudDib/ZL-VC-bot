@@ -49,11 +49,17 @@ async function handleInteraction(client, interaction) {
 
     // ── Buttons (in VC text chat) ───────────────────────────────────────────
     if (interaction.isButton()) {
-      const parts = interaction.customId.split('_');
-      const action = parts[1];
-      const channelId = parts[2];
+  const parts = interaction.customId.split('_');
+  const action = parts[1];
+  const channelId = parts[2];
 
-      const channelData = activeChannels.get(channelId);
+  // ADD THESE 4 LINES
+  console.log('Button pressed:', action, channelId);
+  console.log('activeChannels has it:', activeChannels.has(channelId));
+  console.log('channelData:', activeChannels.get(channelId));
+  console.log('guild:', client.guilds.cache.get(activeChannels.get(channelId)?.guildId));
+
+  const channelData = activeChannels.get(channelId);
 
       if (!channelData) {
         return interaction.reply({ content: '❌ This VC no longer exists.', ...EPH });
