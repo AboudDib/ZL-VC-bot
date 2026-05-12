@@ -96,7 +96,6 @@ async function createTempChannel(client, member, guild) {
     });
 
     await member.voice.setChannel(channel);
-    console.log(`✅ Temp VC created: ${channel.name} for ${member.user.tag}`);
 
     const row = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
@@ -129,7 +128,6 @@ async function createTempChannel(client, member, guild) {
       if (pendingCreation.has(channel.id)) {
         pendingCreation.delete(channel.id);
         activeChannels.delete(channel.id);
-        console.log(`⏰ Timeout — deleting VC: ${channel.name}`);
         await channel.delete().catch(() => {});
       }
     }, 60_000);
@@ -167,7 +165,6 @@ async function finalizeChannel(client, member, guild, channel, languageCode, pro
   await promptMsg.delete().catch(() => {});
   await sendControlPanel(member, channel);
 
-  console.log(`✅ Finalized VC: ${newName}`);
 }
 
 async function sendControlPanel(member, channel) {
