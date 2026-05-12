@@ -6,7 +6,6 @@ const {
   MessageFlags,
   UserSelectMenuBuilder,
 } = require('discord.js');
-
 const { activeChannels, pendingCreation } = require('./store');
 const { finalizeChannel } = require('./voiceHandler');
 const { LANGUAGES } = require('./config');
@@ -15,11 +14,9 @@ const EPH = { flags: MessageFlags.Ephemeral };
 
 async function handleInteraction(client, interaction) {
   try {
+
     // ── Language Select (posted in VC text chat) ────────────────────────────
-    if (
-      interaction.isStringSelectMenu() &&
-      interaction.customId.startsWith('select_language_')
-    ) {
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('select_language_')) {
       const channelId = interaction.customId.replace('select_language_', '');
       const languageCode = interaction.values[0];
       const userId = interaction.user.id;
@@ -27,47 +24,26 @@ async function handleInteraction(client, interaction) {
       const pending = pendingCreation.get(channelId);
 
       if (!pending) {
-        return interaction.reply({
-          content: '❌ This selection already expired.',
-          ...EPH,
-        });
+        return interaction.reply({ content: '❌ This selection already expired.', ...EPH });
       }
 
       if (pending.ownerId !== userId) {
-        return interaction.reply({
-          content: '❌ Only the VC owner can pick the language.',
-          ...EPH,
-        });
+        return interaction.reply({ content: '❌ Only the VC owner can pick the language.', ...EPH });
       }
 
       const guild = client.guilds.cache.get(pending.guildId);
-      const channel = guild?.channels.cache.get(channelId);
-      const member =
-        guild?.members.cache.get(userId) ||
-        (await guild?.members.fetch(userId).catch(() => null));
+      // FIX: fetch channel fresh — cache may be stale after creation
+      const channel = await guild?.channels.fetch(channelId).catch(() => null);
+      const member = guild?.members.cache.get(userId) || await guild?.members.fetch(userId).catch(() => null);
 
       if (!channel || !member) {
-        return interaction.reply({
-          content: '❌ Channel or member not found.',
-          ...EPH,
-        });
+        return interaction.reply({ content: '❌ Channel or member not found.', ...EPH });
       }
 
-      await interaction.reply({
-        content: '✅ Setting up your VC...',
-        ...EPH,
-      });
+      // Ack the interaction immediately
+      await interaction.reply({ content: '✅ Setting up your VC...', ...EPH });
 
-      await finalizeChannel(
-        client,
-        member,
-        guild,
-        channel,
-        languageCode,
-        pending.promptMsg,
-        pending.timeout
-      );
-
+      await finalizeChannel(client, member, guild, channel, languageCode, pending.promptMsg, pending.timeout);
       return;
     }
 
@@ -80,60 +56,37 @@ async function handleInteraction(client, interaction) {
       const channelData = activeChannels.get(channelId);
 
       if (!channelData) {
-        return interaction.reply({
-          content: '❌ This VC no longer exists.',
-          ...EPH,
-        });
+        return interaction.reply({ content: '❌ This VC no longer exists.', ...EPH });
       }
 
       if (channelData.ownerId !== interaction.user.id) {
-        return interaction.reply({
-          content: '❌ Only the VC owner can use these buttons.',
-          ...EPH,
-        });
+        return interaction.reply({ content: '❌ Only the VC owner can use these buttons.', ...EPH });
       }
 
       const guild = client.guilds.cache.get(channelData.guildId);
-      const guildChannel = guild?.channels.cache.get(channelId);
+      // FIX: fetch channel fresh — rename invalidates the cache entry
+      const guildChannel = await guild?.channels.fetch(channelId).catch(() => null);
 
       if (!guildChannel) {
-        return interaction.reply({
-          content: '❌ Channel not found.',
-          ...EPH,
-        });
+        return interaction.reply({ content: '❌ Channel not found.', ...EPH });
       }
 
       if (action === 'lock') {
-        await guildChannel.permissionOverwrites.edit(guild.id, {
-          Connect: false,
-        });
-
+        await guildChannel.permissionOverwrites.edit(guild.id, { Connect: false });
         channelData.locked = true;
-
-        return interaction.reply({
-          content: '🔒 VC **locked**. No one new can join.',
-          ...EPH,
-        });
+        return interaction.reply({ content: '🔒 VC **locked**. No one new can join.', ...EPH });
       }
 
       if (action === 'unlock') {
-        await guildChannel.permissionOverwrites.edit(guild.id, {
-          Connect: true,
-        });
-
+        await guildChannel.permissionOverwrites.edit(guild.id, { Connect: true });
         channelData.locked = false;
-
-        return interaction.reply({
-          content: '🔓 VC **unlocked**. Everyone can join.',
-          ...EPH,
-        });
+        return interaction.reply({ content: '🔓 VC **unlocked**. Everyone can join.', ...EPH });
       }
 
       if (action === 'rename') {
         const modal = new ModalBuilder()
           .setCustomId(`modal_rename_${channelId}`)
           .setTitle('Rename Your Voice Channel');
-
         const nameInput = new TextInputBuilder()
           .setCustomId('new_name')
           .setLabel('New name (language prefix auto-added)')
@@ -141,11 +94,7 @@ async function handleInteraction(client, interaction) {
           .setPlaceholder('e.g. Chill Zone')
           .setMaxLength(80)
           .setRequired(true);
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(nameInput)
-        );
-
+        modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
         return interaction.showModal(modal);
       }
 
@@ -153,7 +102,6 @@ async function handleInteraction(client, interaction) {
         const modal = new ModalBuilder()
           .setCustomId(`modal_limit_${channelId}`)
           .setTitle('Set User Limit');
-
         const limitInput = new TextInputBuilder()
           .setCustomId('user_limit')
           .setLabel('Max users (0 = unlimited, max 99)')
@@ -161,11 +109,7 @@ async function handleInteraction(client, interaction) {
           .setPlaceholder('e.g. 5')
           .setMaxLength(2)
           .setRequired(true);
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(limitInput)
-        );
-
+        modal.addComponents(new ActionRowBuilder().addComponents(limitInput));
         return interaction.showModal(modal);
       }
 
@@ -177,77 +121,37 @@ async function handleInteraction(client, interaction) {
             .setMinValues(1)
             .setMaxValues(1)
         );
-
-        return interaction.reply({
-          content: 'Select who to kick:',
-          components: [row],
-          ...EPH,
-        });
+        return interaction.reply({ content: 'Select who to kick:', components: [row], ...EPH });
       }
     }
 
     // ── User Select (kick) ──────────────────────────────────────────────────
-    if (
-      interaction.isUserSelectMenu() &&
-      interaction.customId.startsWith('userselect_kick_')
-    ) {
-      const channelId = interaction.customId.replace(
-        'userselect_kick_',
-        ''
-      );
-
+    if (interaction.isUserSelectMenu() && interaction.customId.startsWith('userselect_kick_')) {
+      const channelId = interaction.customId.replace('userselect_kick_', '');
       const channelData = activeChannels.get(channelId);
 
       if (!channelData || channelData.ownerId !== interaction.user.id) {
-        return interaction.reply({
-          content: '❌ Not authorized.',
-          ...EPH,
-        });
+        return interaction.reply({ content: '❌ Not authorized.', ...EPH });
       }
 
       const guild = client.guilds.cache.get(channelData.guildId);
       const targetId = interaction.values[0];
+      const targetMember = guild?.members.cache.get(targetId) || await guild?.members.fetch(targetId).catch(() => null);
 
-      const targetMember =
-        guild?.members.cache.get(targetId) ||
-        (await guild?.members.fetch(targetId).catch(() => null));
-
-      if (!targetMember) {
-        return interaction.reply({
-          content: '❌ User not found.',
-          ...EPH,
-        });
-      }
-
-      if (targetId === interaction.user.id) {
-        return interaction.reply({
-          content: "❌ You can't kick yourself.",
-          ...EPH,
-        });
-      }
+      if (!targetMember) return interaction.reply({ content: '❌ User not found.', ...EPH });
+      if (targetId === interaction.user.id) return interaction.reply({ content: "❌ You can't kick yourself.", ...EPH });
 
       const voiceState = guild.voiceStates.cache.get(targetId);
-
       if (voiceState?.channelId !== channelId) {
-        return interaction.reply({
-          content: '❌ That user is not in your VC.',
-          ...EPH,
-        });
+        return interaction.reply({ content: '❌ That user is not in your VC.', ...EPH });
       }
 
       await targetMember.voice.disconnect();
-
-      const guildChannel = guild.channels.cache.get(channelId);
-
-      await guildChannel.permissionOverwrites.edit(targetId, {
-        Connect: false,
-      });
-
-      setTimeout(() => {
-        guildChannel.permissionOverwrites
-          .delete(targetId)
-          .catch(() => {});
-      }, 60_000);
+      // FIX: fetch channel fresh before editing permissions after disconnect
+      const guildChannel = await guild.channels.fetch(channelId).catch(() => null);
+      if (!guildChannel) return interaction.reply({ content: '❌ Channel not found.', ...EPH });
+      await guildChannel.permissionOverwrites.edit(targetId, { Connect: false });
+      setTimeout(() => guildChannel.permissionOverwrites.delete(targetId).catch(() => {}), 60_000);
 
       return interaction.update({
         content: `👢 Kicked **${targetMember.displayName}** from your VC (blocked for 60s).`,
@@ -262,74 +166,40 @@ async function handleInteraction(client, interaction) {
       const channelId = parts[2];
 
       const channelData = activeChannels.get(channelId);
-
       if (!channelData || channelData.ownerId !== interaction.user.id) {
-        return interaction.reply({
-          content: '❌ Not authorized.',
-          ...EPH,
-        });
+        return interaction.reply({ content: '❌ Not authorized.', ...EPH });
       }
 
       const guild = client.guilds.cache.get(channelData.guildId);
-      const guildChannel = guild?.channels.cache.get(channelId);
-
-      if (!guildChannel) {
-        return interaction.reply({
-          content: '❌ Channel no longer exists.',
-          ...EPH,
-        });
-      }
+      // FIX: fetch channel fresh — modal submit comes after rename, cache is stale
+      const guildChannel = await guild?.channels.fetch(channelId).catch(() => null);
+      if (!guildChannel) return interaction.reply({ content: '❌ Channel no longer exists.', ...EPH });
 
       if (type === 'rename') {
-        const rawName = interaction.fields
-          .getTextInputValue('new_name')
-          .trim();
-
-        const lang = LANGUAGES.find(
-          (l) => l.code === channelData.language
-        );
-
+        const rawName = interaction.fields.getTextInputValue('new_name').trim();
+        const lang = LANGUAGES.find((l) => l.code === channelData.language);
         const newName = `${lang.prefix} ${rawName}`;
-
         await guildChannel.setName(newName);
-
-        return interaction.reply({
-          content: `✅ Renamed to **${newName}**`,
-          ...EPH,
-        });
+        return interaction.reply({ content: `✅ Renamed to **${newName}**`, ...EPH });
       }
 
       if (type === 'limit') {
-        const limit = parseInt(
-          interaction.fields.getTextInputValue('user_limit').trim()
-        );
-
+        const limit = parseInt(interaction.fields.getTextInputValue('user_limit').trim());
         if (isNaN(limit) || limit < 0 || limit > 99) {
-          return interaction.reply({
-            content: '❌ Invalid number. Enter 0–99.',
-            ...EPH,
-          });
+          return interaction.reply({ content: '❌ Invalid number. Enter 0–99.', ...EPH });
         }
-
         await guildChannel.setUserLimit(limit);
-
         return interaction.reply({
-          content:
-            limit === 0
-              ? '✅ User limit removed (unlimited).'
-              : `✅ User limit set to **${limit}**.`,
+          content: limit === 0 ? '✅ User limit removed (unlimited).' : `✅ User limit set to **${limit}**.`,
           ...EPH,
         });
       }
     }
+
   } catch (err) {
     console.error('Interaction error:', err);
-
     if (!interaction.replied && !interaction.deferred) {
-      interaction.reply({
-        content: '❌ Something went wrong.',
-        ...EPH,
-      }).catch(() => {});
+      interaction.reply({ content: '❌ Something went wrong.', ...EPH }).catch(() => {});
     }
   }
 }
