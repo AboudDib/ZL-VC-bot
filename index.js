@@ -7,6 +7,7 @@ const http = require('http');
 process.on("unhandledRejection", console.error);
 process.on("uncaughtException", console.error);
 
+// ── Discord Client ───────────────────────────────
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -17,10 +18,10 @@ const client = new Client({
   ],
 });
 
-server.listen(process.env.PORT || 3000, () => {
-  console.log(`🌐 Keep-alive server running on port ${process.env.PORT || 3000}`);
+// ── Events ───────────────────────────────
+client.once('ready', () => {
+  console.log(`✅ Bot online as ${client.user.tag}`);
 });
-
 
 client.on('voiceStateUpdate', (oldState, newState) => {
   handleVoiceStateUpdate(client, oldState, newState);
@@ -30,15 +31,15 @@ client.on('interactionCreate', (interaction) => {
   handleInteraction(client, interaction);
 });
 
-// ── Keep-alive server so Render doesn't sleep the bot ───────────────────────
+// ── Keep-alive server ───────────────────────────────
 const server = http.createServer((req, res) => {
   res.writeHead(200);
   res.end('OK');
 });
 
-server.listen(3000, () => {
-  console.log('🌐 Keep-alive server running on port 3000');
+server.listen(process.env.PORT || 3000, () => {
+  console.log(`🌐 Keep-alive server running on port ${process.env.PORT || 3000}`);
 });
 
-
+// ── Login bot (ONLY ONCE) ───────────────────────────
 client.login(process.env.BOT_TOKEN);
