@@ -10,9 +10,6 @@ const {
 const { JOIN_TO_CREATE_CHANNEL_ID, CATEGORY_ID, LANGUAGES, DEFAULT_USER_LIMIT } = require('./config');
 const { activeChannels, pendingCreation } = require('./store');
 
-// Cooldown set to prevent duplicate channel creation per user
-const creationCooldown = new Set();
-
 // ── Periodic cleanup loop ────────────────────────────────────────────────────
 function startCleanupLoop(client) {
   setInterval(async () => {
@@ -22,25 +19,25 @@ function startCleanupLoop(client) {
         const guild = client.guilds.cache.get(channelData.guildId);
         if (!guild) continue;
 
-        const ch = await guild.channels.fetch(channelId).catch(() => null);
-        if (!ch) {
-          // Channel already gone, just clean up the store
-          activeChannels.delete(channelId);
-          pendingCreation.delete(channelId);
-          continue;
-        }
+        // Check how many members are actually in this channel via voice states
+        const membersInChannel = guild.voiceStates.cache.filter(
+          (vs) => vs.channelId === channelId
+        ).size;
 
-        if (ch.members.size === 0) {
+        if (membersInChannel === 0) {
+          const ch = await guild.channels.fetch(channelId).catch(() => null);
           activeChannels.delete(channelId);
           pendingCreation.delete(channelId);
-          await ch.delete().catch(() => {});
-          console.log(`🧹 Cleanup loop deleted empty VC: ${ch.name}`);
+          if (ch) {
+            await ch.delete().catch(() => {});
+            console.log(`🧹 Cleanup loop deleted empty VC: ${ch.name}`);
+          }
         }
       } catch (err) {
         console.error(`Cleanup loop error for channel ${channelId}:`, err);
       }
     }
-  }, 30_000); // runs every 30 seconds
+  }, 30_000);
 }
 
 async function handleVoiceStateUpdate(client, oldState, newState) {
@@ -49,9 +46,11 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
 
   // ── User joins trigger channel ───────────────────────────────────────────
   if (newState.channelId === JOIN_TO_CREATE_CHANNEL_ID) {
-    if (creationCooldown.has(member.id)) return;
-    creationCooldown.add(member.id);
-    setTimeout(() => creationCooldown.delete(member.id), 5000);
+    const alreadyOwns = [...activeChannels.values()].some(d => d.ownerId === member.id);
+    if (alreadyOwns) {
+      console.log(`⚠️  Duplicate trigger ignored for ${member.user.tag}`);
+      return;
+    }
 
     await createTempChannel(client, member, newState.guild);
     return;
@@ -59,6 +58,9 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
 
   // ── User leaves a managed VC ─────────────────────────────────────────────
   if (oldState.channelId && activeChannels.has(oldState.channelId)) {
+    // If they just moved to another channel (not disconnected), skip
+    if (newState.channelId) return;
+
     const ch = oldState.guild.channels.cache.get(oldState.channelId);
     if (ch && ch.members.size === 0) {
       activeChannels.delete(oldState.channelId);
@@ -93,6 +95,13 @@ async function createTempChannel(client, member, guild) {
           ],
         },
       ],
+    });
+
+    // Register BEFORE moving so duplicate guard works
+    activeChannels.set(channel.id, {
+      ownerId: member.id,
+      language: null,
+      guildId: guild.id,
     });
 
     await member.voice.setChannel(channel);
@@ -141,14 +150,13 @@ async function createTempChannel(client, member, guild) {
       timeout,
     });
 
-    activeChannels.set(channel.id, {
-      ownerId: member.id,
-      language: null,
-      guildId: guild.id,
-    });
-
   } catch (err) {
     console.error('Failed to create temp VC:', err);
+    for (const [id, data] of activeChannels) {
+      if (data.ownerId === member.id && data.language === null) {
+        activeChannels.delete(id);
+      }
+    }
   }
 }
 
