@@ -1,7 +1,11 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
 const { handleVoiceStateUpdate } = require('./src/voiceHandler');
 const { handleInteraction } = require('./src/interactionHandler');
+const http = require('http');
+
+// Keep Render Web Service alive by binding to a port
+http.createServer((req, res) => res.end('Bot is alive!')).listen(process.env.PORT || 3000);
 
 const client = new Client({
   intents: [
