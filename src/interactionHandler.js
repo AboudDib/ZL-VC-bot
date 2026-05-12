@@ -9,8 +9,23 @@ const {
 const { activeChannels, pendingCreation } = require('./store');
 const { finalizeChannel } = require('./voiceHandler');
 const { LANGUAGES } = require('./config');
+const actionLocks = new Map();
 
 const EPH = { flags: MessageFlags.Ephemeral };
+
+
+function isLocked(channelId, action) {
+  return actionLocks.get(`${channelId}_${action}`);
+}
+
+function lock(channelId, action) {
+  actionLocks.set(`${channelId}_${action}`, true);
+}
+
+function unlock(channelId, action) {
+  actionLocks.delete(`${channelId}_${action}`);
+}
+
 
 async function handleInteraction(client, interaction) {
   try {
@@ -68,19 +83,30 @@ async function handleInteraction(client, interaction) {
       }
 
       if (action === 'rename') {
-        const modal = new ModalBuilder()
-          .setCustomId(`modal_rename_${channelId}`)
-          .setTitle('Rename Your Voice Channel');
-        const nameInput = new TextInputBuilder()
-          .setCustomId('new_name')
-          .setLabel('New name (language prefix auto-added)')
-          .setStyle(TextInputStyle.Short)
-          .setPlaceholder('e.g. Chill Zone')
-          .setMaxLength(80)
-          .setRequired(true);
-        modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
-        return interaction.showModal(modal);
-      }
+  if (isLocked(channelId, 'rename')) {
+    return interaction.reply({ content: '⏳ Please wait...', ...EPH });
+  }
+
+  lock(channelId, 'rename');
+
+  const modal = new ModalBuilder()
+    .setCustomId(`modal_rename_${channelId}`)
+    .setTitle('Rename Your Voice Channel');
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId('new_name')
+    .setLabel('New name (language prefix auto-added)')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('e.g. Chill Zone')
+    .setMaxLength(80)
+    .setRequired(true);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(nameInput)
+  );
+
+  return interaction.showModal(modal);
+}
 
       if (action === 'limit') {
         const modal = new ModalBuilder()
@@ -158,12 +184,36 @@ async function handleInteraction(client, interaction) {
       if (!guildChannel) return interaction.reply({ content: '❌ Channel no longer exists.', ...EPH });
 
       if (type === 'rename') {
-        const rawName = interaction.fields.getTextInputValue('new_name').trim();
-        const lang = LANGUAGES.find((l) => l.code === channelData.language);
-        const newName = `${lang.prefix} ${rawName}`;
-        await guildChannel.setName(newName);
-        return interaction.reply({ content: `✅ Renamed to **${newName}**`, ...EPH });
-      }
+  try {
+    const rawName = interaction.fields.getTextInputValue('new_name').trim();
+
+    const lang = LANGUAGES.find((l) => l.code === channelData.language);
+    const newName = `${lang.prefix} ${rawName}`;
+
+    const freshChannel = await guild.channels.fetch(channelId).catch(() => null);
+
+    if (!freshChannel) {
+      return interaction.reply({ content: '❌ Channel no longer exists.', ...EPH });
+    }
+
+    await freshChannel.setName(newName);
+
+    // optional state sync
+    activeChannels.set(channelId, {
+      ...channelData,
+      lastName: newName,
+      updatedAt: Date.now(),
+    });
+
+    return interaction.reply({
+      content: `✅ Renamed to **${newName}**`,
+      ...EPH,
+    });
+
+  } finally {
+    unlock(channelId, 'rename');
+  }
+}
 
       if (type === 'limit') {
         const limit = parseInt(interaction.fields.getTextInputValue('user_limit').trim());
