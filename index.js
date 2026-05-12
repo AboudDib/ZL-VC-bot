@@ -21,7 +21,6 @@ server.listen(process.env.PORT || 3000, () => {
   console.log(`🌐 Keep-alive server running on port ${process.env.PORT || 3000}`);
 });
 
-client.login(process.env.BOT_TOKEN);
 
 client.on('voiceStateUpdate', (oldState, newState) => {
   handleVoiceStateUpdate(client, oldState, newState);
