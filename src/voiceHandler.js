@@ -8,52 +8,28 @@ const {
   EmbedBuilder,
 } = require('discord.js');
 const { JOIN_TO_CREATE_CHANNEL_ID, CATEGORY_ID, LANGUAGES, DEFAULT_USER_LIMIT } = require('./config');
-const { activeChannels, pendingCreation } = require('./store');
-
-// Tracks userId -> timestamp of last VC creation trigger (30s user cooldown)
-const creationCooldown = new Map();
-const COOLDOWN_MS = 5_000;
-
-// Synchronous lock — set before any await so duplicate events in same tick are blocked
-const functionLock = new Set();
+const { activeChannels } = require('./store');
 
 async function handleVoiceStateUpdate(client, oldState, newState) {
   const member = newState.member || oldState.member;
   if (!member || member.user.bot) return;
 
-  // ── User joins trigger channel ───────────────────────────────────────────
+  // ── User joins the trigger channel ───────────────────────────────────────
   if (newState.channelId === JOIN_TO_CREATE_CHANNEL_ID) {
-    const now = Date.now();
-    const lastTrigger = creationCooldown.get(member.id);
-
-    if (lastTrigger && now - lastTrigger < COOLDOWN_MS) {
-      console.log(`🚫 Cooldown active for ${member.user.tag}, ignoring trigger`);
-      return;
-    }
-
-    if (functionLock.has(member.id)) {
-      console.log(`🔒 Function locked for ${member.user.tag}, ignoring trigger`);
-      return;
-    }
-
-    functionLock.add(member.id);
-    creationCooldown.set(member.id, now);
-
-    setTimeout(() => functionLock.delete(member.id), 5_000);
-    setTimeout(() => creationCooldown.delete(member.id), COOLDOWN_MS);
-
     await createTempChannel(client, member, newState.guild);
     return;
   }
 
   // ── User leaves a managed VC ─────────────────────────────────────────────
   if (oldState.channelId && activeChannels.has(oldState.channelId)) {
-    if (newState.channelId) return;
-
     const ch = oldState.guild.channels.cache.get(oldState.channelId);
     if (ch && ch.members.size === 0) {
+      const data = activeChannels.get(oldState.channelId);
+
+      // Clear the 60s timeout if it's still running (finalized or not)
+      if (data?.timeoutRef) clearTimeout(data.timeoutRef);
+
       activeChannels.delete(oldState.channelId);
-      pendingCreation.delete(oldState.channelId);
       await ch.delete().catch(() => {});
       console.log(`🗑️  Deleted empty VC: ${ch.name}`);
     }
@@ -62,6 +38,7 @@ async function handleVoiceStateUpdate(client, oldState, newState) {
 
 async function createTempChannel(client, member, guild) {
   try {
+    // Step 1: Create the VC immediately with a temp name
     const channel = await guild.channels.create({
       name: `🌐 ${member.displayName}'s VC`,
       type: ChannelType.GuildVoice,
@@ -86,14 +63,11 @@ async function createTempChannel(client, member, guild) {
       ],
     });
 
-    activeChannels.set(channel.id, {
-      ownerId: member.id,
-      language: null,
-      guildId: guild.id,
-    });
-
+    // Step 2: Move member into it
     await member.voice.setChannel(channel);
+    console.log(`✅ Temp VC created: ${channel.name} for ${member.user.tag}`);
 
+    // Step 3: Post language picker in the VC text chat
     const row = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`select_language_${channel.id}`)
@@ -121,59 +95,63 @@ async function createTempChannel(client, member, guild) {
       components: [row],
     });
 
-    const timeout = setTimeout(async () => {
-      if (pendingCreation.has(channel.id)) {
-        pendingCreation.delete(channel.id);
+    // Step 4: 60s timeout — delete if still not finalized
+    const timeoutRef = setTimeout(async () => {
+      const data = activeChannels.get(channel.id);
+      if (data && !data.finalized) {
         activeChannels.delete(channel.id);
+        console.log(`⏰ Timeout — deleting VC: ${channel.name}`);
         await channel.delete().catch(() => {});
       }
     }, 60_000);
 
-    pendingCreation.set(channel.id, {
+    // Step 5: Register in activeChannels — single source of truth
+    activeChannels.set(channel.id, {
       ownerId: member.id,
       guildId: guild.id,
-      promptMsg,
-      timeout,
+      language: null,
+      locked: false,
+      finalized: false,
+      timeoutRef,
+      promptMsgId: promptMsg.id,
     });
 
   } catch (err) {
     console.error('Failed to create temp VC:', err);
-    functionLock.delete(member.id);
-    for (const [id, data] of activeChannels) {
-      if (data.ownerId === member.id && data.language === null) {
-        activeChannels.delete(id);
-      }
-    }
   }
 }
 
-async function finalizeChannel(client, member, guild, channel, languageCode, promptMsg, timeout) {
-  clearTimeout(timeout);
-  pendingCreation.delete(channel.id);
+async function finalizeChannel(client, member, guild, channel, languageCode) {
+  const data = activeChannels.get(channel.id);
+  if (!data) return; // already cleaned up
+
+  // Cancel the 60s timeout
+  clearTimeout(data.timeoutRef);
 
   const lang = LANGUAGES.find((l) => l.code === languageCode);
   const newName = `${lang.prefix} ${member.displayName}'s VC`;
 
-  // Fetch fresh channel before rename to avoid stale cache
-  const freshChannel = await guild.channels.fetch(channel.id).catch(() => null);
-  if (freshChannel) {
-    await freshChannel.setName(newName).catch(() => {});
-  } else {
-    await channel.setName(newName).catch(() => {});
+  // Rename the channel
+  await channel.setName(newName).catch(() => {});
+
+  // Delete the language prompt message
+  try {
+    const promptMsg = await channel.messages.fetch(data.promptMsgId);
+    await promptMsg.delete().catch(() => {});
+  } catch {
+    // message already gone, fine
   }
 
-  // Always do a full set — never mutate in place — so interactionHandler always
-  // reads a complete, up-to-date record with language populated
-  activeChannels.set(channel.id, {
-    ownerId: member.id,
-    language: languageCode,
-    guildId: guild.id,
-    lastName: newName,
-    updatedAt: Date.now(),
-  });
+  // Update the store entry in-place — channel.id never changes
+  data.language = languageCode;
+  data.finalized = true;
+  data.timeoutRef = null;
+  data.promptMsgId = null;
 
-  await promptMsg.delete().catch(() => {});
-  await sendControlPanel(member, freshChannel || channel);
+  // Send control panel
+  await sendControlPanel(member, channel);
+
+  console.log(`✅ Finalized VC: ${newName}`);
 }
 
 async function sendControlPanel(member, channel) {
@@ -182,13 +160,17 @@ async function sendControlPanel(member, channel) {
     .setTitle('🎛️ VC Control Panel')
     .setDescription(`Welcome to **${channel.name}**! Use the buttons below to manage your VC.`)
     .addFields(
-      { name: '✏️ Rename', value: 'Change channel name', inline: true },
-      { name: '👥 Limit', value: 'Set max users', inline: true },
-      { name: '👢 Kick', value: 'Remove someone', inline: true },
+      { name: '🔒 Lock',   value: 'Block others from joining', inline: true },
+      { name: '🔓 Unlock', value: 'Open it back up',           inline: true },
+      { name: '✏️ Rename', value: 'Change channel name',       inline: true },
+      { name: '👥 Limit',  value: 'Set max users',             inline: true },
+      { name: '👢 Kick',   value: 'Remove someone',            inline: true },
     )
     .setFooter({ text: 'Only the owner can use these buttons' });
 
   const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`vc_lock_${channel.id}`).setLabel('🔒 Lock').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`vc_unlock_${channel.id}`).setLabel('🔓 Unlock').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`vc_rename_${channel.id}`).setLabel('✏️ Rename').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`vc_limit_${channel.id}`).setLabel('👥 Limit').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`vc_kick_${channel.id}`).setLabel('👢 Kick').setStyle(ButtonStyle.Danger)
