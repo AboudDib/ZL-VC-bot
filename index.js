@@ -4,6 +4,9 @@ const { handleVoiceStateUpdate } = require('./src/voiceHandler');
 const { handleInteraction } = require('./src/interactionHandler');
 const http = require('http');
 
+process.on("unhandledRejection", console.error);
+process.on("uncaughtException", console.error);
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -14,10 +17,11 @@ const client = new Client({
   ],
 });
 
-client.once('ready', () => {
-  console.log(`✅ Bot online as ${client.user.tag}`);
-  console.log(`📡 Serving ${client.guilds.cache.size} server(s)`);
+server.listen(process.env.PORT || 3000, () => {
+  console.log(`🌐 Keep-alive server running on port ${process.env.PORT || 3000}`);
 });
+
+client.login(process.env.BOT_TOKEN);
 
 client.on('voiceStateUpdate', (oldState, newState) => {
   handleVoiceStateUpdate(client, oldState, newState);
