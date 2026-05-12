@@ -1,11 +1,7 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits } = require('discord.js');
-const { handleVoiceStateUpdate } = require('./src/voiceHandler');
+const { handleVoiceStateUpdate, startCleanupLoop } = require('./src/voiceHandler');
 const { handleInteraction } = require('./src/interactionHandler');
-const http = require('http');
-
-// Keep Render Web Service alive by binding to a port
-http.createServer((req, res) => res.end('Bot is alive!')).listen(process.env.PORT || 3000);
 
 const client = new Client({
   intents: [
@@ -20,6 +16,7 @@ const client = new Client({
 client.once('ready', () => {
   console.log(`✅ Bot online as ${client.user.tag}`);
   console.log(`📡 Serving ${client.guilds.cache.size} server(s)`);
+  startCleanupLoop(client); // start checking for empty VCs every 30s
 });
 
 client.on('voiceStateUpdate', (oldState, newState) => {
