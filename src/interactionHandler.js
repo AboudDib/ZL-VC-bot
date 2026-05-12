@@ -32,7 +32,6 @@ async function handleInteraction(client, interaction) {
       }
 
       const guild = client.guilds.cache.get(pending.guildId);
-      // FIX: fetch channel fresh — cache may be stale after creation
       const channel = await guild?.channels.fetch(channelId).catch(() => null);
       const member = guild?.members.cache.get(userId) || await guild?.members.fetch(userId).catch(() => null);
 
@@ -40,26 +39,18 @@ async function handleInteraction(client, interaction) {
         return interaction.reply({ content: '❌ Channel or member not found.', ...EPH });
       }
 
-      // Ack the interaction immediately
       await interaction.reply({ content: '✅ Setting up your VC...', ...EPH });
-
       await finalizeChannel(client, member, guild, channel, languageCode, pending.promptMsg, pending.timeout);
       return;
     }
 
     // ── Buttons (in VC text chat) ───────────────────────────────────────────
     if (interaction.isButton()) {
-  const parts = interaction.customId.split('_');
-  const action = parts[1];
-  const channelId = parts[2];
+      const parts = interaction.customId.split('_');
+      const action = parts[1];
+      const channelId = parts[2];
 
-  // ADD THESE 4 LINES
-  console.log('Button pressed:', action, channelId);
-  console.log('activeChannels has it:', activeChannels.has(channelId));
-  console.log('channelData:', activeChannels.get(channelId));
-  console.log('guild:', client.guilds.cache.get(activeChannels.get(channelId)?.guildId));
-
-  const channelData = activeChannels.get(channelId);
+      const channelData = activeChannels.get(channelId);
 
       if (!channelData) {
         return interaction.reply({ content: '❌ This VC no longer exists.', ...EPH });
@@ -70,23 +61,10 @@ async function handleInteraction(client, interaction) {
       }
 
       const guild = client.guilds.cache.get(channelData.guildId);
-      // FIX: fetch channel fresh — rename invalidates the cache entry
       const guildChannel = await guild?.channels.fetch(channelId).catch(() => null);
 
       if (!guildChannel) {
         return interaction.reply({ content: '❌ Channel not found.', ...EPH });
-      }
-
-      if (action === 'lock') {
-        await guildChannel.permissionOverwrites.edit(guild.id, { Connect: false });
-        channelData.locked = true;
-        return interaction.reply({ content: '🔒 VC **locked**. No one new can join.', ...EPH });
-      }
-
-      if (action === 'unlock') {
-        await guildChannel.permissionOverwrites.edit(guild.id, { Connect: true });
-        channelData.locked = false;
-        return interaction.reply({ content: '🔓 VC **unlocked**. Everyone can join.', ...EPH });
       }
 
       if (action === 'rename') {
@@ -153,7 +131,6 @@ async function handleInteraction(client, interaction) {
       }
 
       await targetMember.voice.disconnect();
-      // FIX: fetch channel fresh before editing permissions after disconnect
       const guildChannel = await guild.channels.fetch(channelId).catch(() => null);
       if (!guildChannel) return interaction.reply({ content: '❌ Channel not found.', ...EPH });
       await guildChannel.permissionOverwrites.edit(targetId, { Connect: false });
@@ -177,7 +154,6 @@ async function handleInteraction(client, interaction) {
       }
 
       const guild = client.guilds.cache.get(channelData.guildId);
-      // FIX: fetch channel fresh — modal submit comes after rename, cache is stale
       const guildChannel = await guild?.channels.fetch(channelId).catch(() => null);
       if (!guildChannel) return interaction.reply({ content: '❌ Channel no longer exists.', ...EPH });
 
